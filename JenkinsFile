@@ -8,24 +8,8 @@ pipeline {
 
     stages {
         stage('Checkout') {
-            steps {
-                script {
-                    // Determine the Git executable based on the node's OS
-                    def gitTool = isUnix() ? 'linux-git' : 'windows-git'
-                    def gitExe = tool name: gitTool, type: 'hudson.plugins.git.GitTool'
-
-                    // Set the Git executable path in the environment
-                    env.GIT_EXE = gitExe
-
-                    // Use the appropriate Git executable for checkout
-                    checkout([$class: 'GitSCM',
-                        branches: [[name: '*/main']],
-                        doGenerateSubmoduleConfigurations: false,
-                        extensions: [],
-                        userRemoteConfigs: [[url: 'https://github.com/MaheshGilbile/MyApps.git', credentialsId: 'bitbucket-access']],
-                        gitTool: env.GIT_EXE
-                    ])
-                }
+            steps { 
+				checkout scm
             }
         }
 
