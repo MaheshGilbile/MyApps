@@ -4,22 +4,14 @@ pipeline {
     environment {
         SONARQUBE_SERVER = 'SonarQubeServer' // Name of the SonarQube server configured in Jenkins
         MAVEN_HOME = tool name: 'Maven', type: 'hudson.tasks.Maven$MavenInstallation'
-	   GIT_CREDENTIALS = 'git-api-personal-access-token' // Add your GitHub credentials ID here
+	    //GIT_CREDENTIALS = 'git-api-personal-access-token' // Add your GitHub credentials ID here
 
     }
 
     stages {
         stage('Checkout') {
             steps { 
-				checkout([$class: 'GitSCM',
-                        branches: [[name: '*/main']],
-                        doGenerateSubmoduleConfigurations: false,
-                        extensions: [],
-                        userRemoteConfigs: [[
-                            url: 'https://github.com/MaheshGilbile/MyApps.git',
-                            credentialsId: env.GIT_CREDENTIALS
-                        ]]
-                    ])
+				checkout scm
             }
         }
 
