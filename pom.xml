@@ -9,7 +9,6 @@
     <properties>
         <java.version>11</java.version>
         <spring-boot.version>2.6.3</spring-boot.version>
-        <spring-cloud.version>2021.0.1</spring-cloud.version>
         <jackson.version>2.13.0</jackson.version>
         <junit.version>5.8.1</junit.version>
         <mysql.version>8.0.28</mysql.version>
@@ -32,13 +31,6 @@
             <artifactId>spring-boot-starter-test</artifactId>
             <version>${spring-boot.version}</version>
             <scope>test</scope>
-        </dependency>
-
-        <!-- Spring Cloud Dependencies -->
-        <dependency>
-            <groupId>org.springframework.cloud</groupId>
-            <artifactId>spring-cloud-starter-config</artifactId>
-            <version>${spring-cloud.version}</version>
         </dependency>
 
         <!-- Jackson Dependencies -->
