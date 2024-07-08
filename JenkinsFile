@@ -1,31 +1,32 @@
 @Library('metrics@main') _
+
 pipeline {
     agent any
 
     environment {
-        SONARQUBE_SERVER = 'SonarQubeServer' // Name of the SonarQube server configured in Jenkins
         MAVEN_HOME = tool name: 'Maven', type: 'hudson.tasks.Maven$MavenInstallation'
-	    //GIT_CREDENTIALS = 'git-api-personal-access-token' // Add your GitHub credentials ID here
-		JOB_NAME = 'my-jenkins-job'
-		INSTANCE_NAME = '${env.NODE_NAME}'
-		APP_NAME = 'ABC'
-
+        NEXUS_URL = 'http://localhost:8088' // Replace with your Nexus server URL
+        NEXUS_REPO = 'maven-local-snapshot' // Replace with your Nexus repository name
+        NEXUS_CREDENTIALS_ID = 'artifactory-credentials' // Jenkins credentials ID for Nexus
+        JOB_NAME = 'demo-job'
+        INSTANCE_NAME = env.NODE_NAME
+        APP_NAME = 'ABC'
     }
 
     stages {
         stage('Checkout') {
-            steps { 
-				checkout scmGit(branches: [[name: '*/main']], extensions: [], gitTool: 'windows-git', userRemoteConfigs: [[credentialsId: 'bitbucket-access-creds', url: 'https://github.com/MaheshGilbile/MyApps.git']])
-				 script {
-                    branchName = '${env.GIT_BRANCH}'
-					metrics(name: 'branch_name', help: 'Branch name', job: JOB_NAME, instance: INSTANCE_NAME, value: 1)
-				 }
+            steps {
+                checkout scmGit(branches: [[name: '*/main']], extensions: [], gitTool: 'windows-git', userRemoteConfigs: [[credentialsId: 'bitbucket-access-creds', url: 'https://github.com/MaheshGilbile/MyApps.git']])
+                script {
+                    def branchName = env.GIT_BRANCH
+                    metrics(name: 'branch_name', help: 'Branch name', job: JOB_NAME, instance: INSTANCE_NAME, value: 1)
+                }
             }
         }
 
         stage('Build') {
             steps {
-				script {
+                script {
                     def buildStatus = "SUCCESS"
                     try {
                         bat "${MAVEN_HOME}/bin/mvn clean install"
@@ -38,12 +39,55 @@ pipeline {
             }
         }
 
+        stage('Unit Test') {
+            steps {
+                script {
+                    def testCoverage = 0
+                    def testStatus = "FAILED"
+                    try {
+                        // Run unit tests and generate coverage report
+                        bat "${MAVEN_HOME}/bin/mvn clean test jacoco:report"
+                        
+                        // Parse the coverage report to extract coverage percentage
+                        def coverageReport = readFile('target/site/jacoco/index.html')
+                        def matcher = (coverageReport =~ /.*<td class="ctr2">([\d]+)%<\/td>.*/)
+                        if (matcher.matches()) {
+                            testCoverage = Integer.parseInt(matcher.group(1))
+                            testStatus = "SUCCESS"
+                        }
+                    } catch (Exception e) {
+                        testCoverage = 0
+                    } finally {
+                        metrics(name: 'unit_test_coverage', help: 'Unit Test Coverage', job: JOB_NAME, instance: INSTANCE_NAME, value: testCoverage)
+                        metrics(name: 'unit_test_status', help: 'Unit Test Status', job: JOB_NAME, instance: INSTANCE_NAME, value: (testStatus == "SUCCESS" ? 1 : 0))
+                    }
+                }
+            }
+        }
+
         stage('SonarQube Analysis') {
             steps {
                 script {
-                    // Run SonarQube analysis
                     withSonarQubeEnv('SonarQubeServer') {
                         bat "${MAVEN_HOME}/bin/mvn sonar:sonar -Dsonar.projectKey=springboot-app"
+                    }
+                }
+            }
+        }
+
+        stage('Artifactory Upload') {
+            steps {
+                script {
+                    def artifactoryStatus = "FAILED"
+                    try {
+                        withCredentials([usernamePassword(credentialsId: NEXUS_CREDENTIALS_ID, usernameVariable: 'NEXUS_USERNAME', passwordVariable: 'NEXUS_PASSWORD')]) {
+                            bat "${MAVEN_HOME}/bin/mvn deploy:deploy-file -Durl=${NEXUS_URL}/repository/${NEXUS_REPO} -DrepositoryId=nexus -Dfile=$WORKSPACE/target/springboot-app-1.0-SNAPSHOT.jar -DgroupId=com.example -DartifactId=my-artifact -Dversion=1.0 -Dpackaging=jar"
+                            artifactoryStatus = "SUCCESS"
+                        }
+                    } catch (Exception e) {
+                        artifactoryStatus = "FAILED"
+                    } finally {
+                        metrics(name: 'artifactory_upload_status', help: 'Artifactory Upload Status', job: JOB_NAME, instance: INSTANCE_NAME, value: (artifactoryStatus == "SUCCESS" ? 1 : 0))
                     }
                 }
             }
@@ -52,14 +96,11 @@ pipeline {
 
     post {
         always {
-            // Archive the build artifacts
             archiveArtifacts artifacts: 'target/*.jar', allowEmptyArchive: true
-            // Record test results
             junit 'target/surefire-reports/*.xml'
         }
         failure {
-            // Notify about build failure
-            mail to: 'gilbile_mahesh@yahoo.com',
+            mail to: 'your-email@example.com',
                  subject: "Failed Pipeline: ${currentBuild.fullDisplayName}",
                  body: "Something went wrong in the pipeline ${env.BUILD_URL}"
         }
