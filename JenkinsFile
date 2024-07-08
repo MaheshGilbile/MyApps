@@ -83,7 +83,7 @@ pipeline {
                         try {
                             withCredentials([usernamePassword(credentialsId: NEXUS_CREDENTIALS_ID, usernameVariable: 'NEXUS_USERNAME', passwordVariable: 'NEXUS_PASSWORD')]) {
                                 bat "${MAVEN_HOME}/bin/mvn clean install"
-								bat "${MAVEN_HOME}/bin/mvn deploy:deploy-file -Durl=${NEXUS_URL}/repository/${NEXUS_REPO} -DrepositoryId=nexus -Dfile=$WORKSPACE/target/springboot-app-1.0-SNAPSHOT.jar -DgroupId=com.example -DartifactId=springboot-app -Dversion=1.0.0 -Dpackaging=jar"
+								bat "${MAVEN_HOME}/bin/mvn deploy:deploy-file -Durl=${NEXUS_URL}/repository/${NEXUS_REPO} -DrepositoryId=nexus -Dfile=$WORKSPACE/target/springboot-app-1.0-SNAPSHOT.jar -DgroupId=com.example -DartifactId=springboot-app -Dversion=1.0 -Dpackaging=jar"
                                 artifactoryStatus = "SUCCESS"
                             }
                         } catch (Exception e) {
