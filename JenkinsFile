@@ -1,134 +1,95 @@
+// Jenkinsfile
 @Library('metrics@main') _
 
 pipeline {
     agent any
-
     environment {
         MAVEN_HOME = tool name: 'Maven', type: 'hudson.tasks.Maven$MavenInstallation'
         NEXUS_URL = 'http://localhost:8088' // Replace with your Nexus server URL
         NEXUS_REPO = 'maven-local-snapshot' // Replace with your Nexus repository name
         NEXUS_CREDENTIALS_ID = 'artifactory-credentials' // Jenkins credentials ID for Nexus
-        JOB_NAME = 'demo-job'
+        JOB_NAME = 'DemoApp1'
         INSTANCE_NAME = "${env.NODE_NAME}"
-        APP_NAME = 'ABC'
+        BRANCH_NAME = 'main' // Example branch name
+        APP_NAME = 'MyProjectName1' // Example application name
     }
 
     stages {
-        stage('Checkout') {
+        stage('SCM Checkout') {
             steps {
-                checkout scmGit(branches: [[name: '*/main']], extensions: [], gitTool: 'windows-git', userRemoteConfigs: [[credentialsId: 'bitbucket-access-creds', url: 'https://github.com/MaheshGilbile/MyApps.git']])
-                script {
-                    def metrics = collectMetrics()
-                    def branchName = "${env.GIT_BRANCH}"
-                    metrics.collectBranchMetrics(branchName)
-                }
+                checkout scmGit(branches: [[name: BRANCH_NAME]], extensions: [], gitTool: 'windows-git', userRemoteConfigs: [[credentialsId: 'bitbucket-access-creds', url: 'https://github.com/MaheshGilbile/MyApps.git']])
             }
         }
-
         stage('Build') {
             steps {
                 configFileProvider([configFile(fileId: 'settings.xml', targetLocation: "${env.HOME}/.m2/settings.xml")]) {
                     script {
-                        def metrics = collectMetrics()
-                        def startTime = System.currentTimeMillis()
-                        def buildStatus = "SUCCESS"
-                        try {
-                            bat "${MAVEN_HOME}/bin/mvn clean install"
-                        } catch (Exception e) {
-                            buildStatus = "FAILED"
-                        } finally {
-                            def duration = System.currentTimeMillis() - startTime
-                            metrics.buildStageMetrics(buildStatus == "SUCCESS", duration)
-                        }
+                        bat "${MAVEN_HOME}/bin/mvn clean install"
                     }
                 }
             }
         }
-
-        stage('Unit Test') {
+        stage('Unit Test Coverage') {
             steps {
                 configFileProvider([configFile(fileId: 'settings.xml', targetLocation: "${env.HOME}/.m2/settings.xml")]) {
                     script {
-                        def metrics = collectMetrics()
-                        try {
-                            bat "${MAVEN_HOME}/bin/mvn clean test"
-                            // Parse unit test coverage report and set coverage percentage
-                            int coveragePercentage = parseCoverageReport()
-                            metrics.unitTestCoverageMetrics(coveragePercentage)
-                        } catch (Exception e) {
-                            metrics.unitTestCoverageMetrics(0)
-                        }
+                        bat "${MAVEN_HOME}/bin/mvn clean test"
                     }
                 }
             }
         }
-
-        stage('SonarQube Analysis') {
+        stage('Sonar Scanning') {
             steps {
                 configFileProvider([configFile(fileId: 'settings.xml', targetLocation: "${env.HOME}/.m2/settings.xml")]) {
                     script {
-                        def metrics = collectMetrics()
-                        boolean sonarStatus = false
                         withSonarQubeEnv('SonarQubeServer') {
-                            try {
-                                bat "${MAVEN_HOME}/bin/mvn sonar:sonar -Dsonar.projectKey=springboot-app"
-                                sonarStatus = true
-                            } catch (Exception e) {
-                                sonarStatus = false
-                            } finally {
-                                metrics.sonarAnalysisMetrics(sonarStatus)
-                            }
+                            bat "${MAVEN_HOME}/bin/mvn sonar:sonar -Dsonar.projectKey=springboot-app"
                         }
                     }
                 }
             }
         }
-
-        stage('Artifactory Upload') {
+        stage('Artifactory upload to NexusIQ') {
             steps {
                 configFileProvider([configFile(fileId: 'settings.xml', targetLocation: "${WORKSPACE}/settings.xml")]) {
-                    script {
-                        def metrics = collectMetrics()
-                        boolean uploadStatus = false
-                        try {
-                            withCredentials([usernamePassword(credentialsId: NEXUS_CREDENTIALS_ID, usernameVariable: 'NEXUS_USERNAME', passwordVariable: 'NEXUS_PASSWORD')]) {
-                                bat "${MAVEN_HOME}/bin/mvn clean install"
-                                bat "${MAVEN_HOME}/bin/mvn deploy -s ${WORKSPACE}/settings.xml"
-                                uploadStatus = true
-                            }
-                        } catch (Exception e) {
-                            uploadStatus = false
-                        } finally {
-                            metrics.artifactoryUploadMetrics(uploadStatus)
-                        }
+                    withCredentials([usernamePassword(credentialsId: NEXUS_CREDENTIALS_ID, usernameVariable: 'NEXUS_USERNAME', passwordVariable: 'NEXUS_PASSWORD')]) {
+                        bat "${MAVEN_HOME}/bin/mvn clean install"
+                        bat "${MAVEN_HOME}/bin/mvn deploy -s ${WORKSPACE}/settings.xml"
                     }
                 }
             }
         }
-    }
+        stage('Metrics') {
+            steps {
+                script {
+                    def projectName = "${env.JOB_NAME}"
+                    if (projectName == null || projectName.isEmpty()) {
+                        echo "Project name is null or empty. Skipping metrics collection."
+                        return
+                    }
 
-    post {
-        always {
-            script {
-                def metrics = collectMetrics()
-                def totalBuilds = metrics.getTotalBuilds()
-                def successfulBuilds = metrics.getSuccessfulBuilds()
-                def failedBuilds = metrics.getFailedBuilds()
-                def averageBuildTime = metrics.getAverageBuildTime()
-                def successRate = metrics.getSuccessRate()
+                    def metricsCollector = new com.example.metrics.MetricsCollector()
+                    def metrics = metricsCollector.collectMetrics(projectName, "${env.APP_NAME}")
 
-                // Push these metrics to Prometheus or Pushgateway
-                metrics.pushMetricsToPrometheus()
+                    if (metrics == null) {
+                        echo "Metrics are null. Skipping Prometheus push."
+                        return
+                    }
+
+                    prometheusPush(
+                        gateway: 'localhost:9091',
+                        job: projectName,
+                        metrics: [
+                            'total_builds': metrics['total_builds'],
+                            'total_success_builds': metrics['total_success_builds'],
+                            'total_failed_builds': metrics['total_failed_builds'],
+                            'average_build_time': metrics['average_build_time'],
+                            'success_rate': metrics['success_rate']
+                        ],
+                        app_name: "${env.APP_NAME}"
+                    )
+                }
             }
-
-            archiveArtifacts artifacts: 'target/*.jar', allowEmptyArchive: true
-            junit 'target/surefire-reports/*.xml'
-        }
-
-        failure {
-            mail to: 'your-email@example.com',
-                 subject: "Failed Pipeline: ${currentBuild.fullDisplayName}",
-                 body: "Something went wrong in the pipeline ${env.BUILD_URL}"
         }
     }
 }

@@ -1,0 +1,101 @@
+// Jenkinsfile
+@Library('metrics@main') _
+
+pipeline {
+    agent any
+	 environment {
+        MAVEN_HOME = tool name: 'Maven', type: 'hudson.tasks.Maven$MavenInstallation'
+        NEXUS_URL = 'http://localhost:8088' // Replace with your Nexus server URL
+        NEXUS_REPO = 'maven-local-snapshot' // Replace with your Nexus repository name
+        NEXUS_CREDENTIALS_ID = 'artifactory-credentials' // Jenkins credentials ID for Nexus
+        JOB_NAME = 'DemoApp1'
+        INSTANCE_NAME = "${env.NODE_NAME}"
+        BRANCH_NAME = 'main' // Example branch name
+    }
+
+    stages {
+        stage('SCM Checkout') {
+            steps {
+                checkout scmGit(branches: [[name: BRANCH_NAME]], extensions: [], gitTool: 'windows-git', userRemoteConfigs: [[credentialsId: 'bitbucket-access-creds', url: 'https://github.com/MaheshGilbile/MyApps.git']])
+            }
+        }
+        stage('Build') {
+            steps {
+                configFileProvider([configFile(fileId: 'settings.xml', targetLocation: "${env.HOME}/.m2/settings.xml")]) {
+                    script {
+                            bat "${MAVEN_HOME}/bin/mvn clean install"
+                    }
+                }
+            }
+        }
+        stage('Unit Test Coverage') {
+            steps {
+                configFileProvider([configFile(fileId: 'settings.xml', targetLocation: "${env.HOME}/.m2/settings.xml")]) {
+                    script {
+
+                            bat "${MAVEN_HOME}/bin/mvn clean test"
+
+                    }
+                }
+            }
+        }
+        stage('Sonar Scanning') {
+			steps {
+            configFileProvider([configFile(fileId: 'settings.xml', targetLocation: "${env.HOME}/.m2/settings.xml")]) {
+                    script {
+                      
+                            withSonarQubeEnv('SonarQubeServer') {
+                                bat "${MAVEN_HOME}/bin/mvn sonar:sonar -Dsonar.projectKey=springboot-app"
+                                
+                            }
+                        
+                    }
+                }
+			}
+        }
+        stage('Artifactory upload to NexusIQ') {
+            steps {
+               configFileProvider([configFile(fileId: 'settings.xml', targetLocation: "${WORKSPACE}/settings.xml")]) {
+
+                            withCredentials([usernamePassword(credentialsId: NEXUS_CREDENTIALS_ID, usernameVariable: 'NEXUS_USERNAME', passwordVariable: 'NEXUS_PASSWORD')]) {
+                                bat "${MAVEN_HOME}/bin/mvn clean install"
+                                bat "${MAVEN_HOME}/bin/mvn deploy -s ${WORKSPACE}/settings.xml"
+                            }
+               
+                    }
+                }
+            }
+        
+			stage('Metrics') {
+    steps {
+        script {
+            def projectName = "${env.JOB_NAME}"
+            if (projectName == null || projectName.isEmpty()) {
+                echo "Project name is null or empty. Skipping metrics collection."
+                return
+            }
+
+            def metricsCollector = new com.example.metrics.MetricsCollector()
+            def metrics = metricsCollector.collectMetrics(projectName)
+
+            if (metrics == null) {
+                echo "Metrics are null. Skipping Prometheus push."
+                return
+            }
+
+            prometheusPush(
+                gateway: 'localhost:9091',
+                job: projectName,
+                metrics: [
+                    'total_builds': metrics['total_builds'],
+                    'total_success_builds': metrics['total_success_builds'],
+                    'total_failed_builds': metrics['total_failed_builds'],
+                    'average_build_time': metrics['average_build_time'],
+                    'uccess_rate': metrics['success_rate']
+                ]
+            )
+        }
+    }
+}
+    }
+}
