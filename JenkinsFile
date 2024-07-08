@@ -11,15 +11,16 @@ pipeline {
         JOB_NAME = 'demo-job'
         INSTANCE_NAME = "${env.NODE_NAME}"
         APP_NAME = 'ABC'
+        startTime = null // Global variable to store overall build start time
     }
 
     stages {
         stage('Checkout') {
             steps {
-                checkout scmGit(branches: [[name: '*/main']], extensions: [], gitTool: 'windows-git', userRemoteConfigs: [[credentialsId: 'bitbucket-access-creds', url: 'https://github.com/MaheshGilbile/MyApps.git']])
                 script {
-                    def branchName = "${env.GIT_BRANCH}"
-                    metrics(name: 'branch_name', help: 'Branch name', job: JOB_NAME, instance: INSTANCE_NAME, value: 1)
+                    startTime = new Date().getTime() // Start time at SCM checkout
+                    checkout scmGit(branches: [[name: '*/main']], extensions: [], gitTool: 'windows-git', userRemoteConfigs: [[credentialsId: 'bitbucket-access-creds', url: 'https://github.com/MaheshGilbile/MyApps.git']])
+                    collectMetrics().collectBranchMetrics("${env.GIT_BRANCH}")
                 }
             }
         }
@@ -28,13 +29,10 @@ pipeline {
             steps {
                 configFileProvider([configFile(fileId: 'settings.xml', targetLocation: "${env.HOME}/.m2/settings.xml")]) {
                     script {
-                        def buildStatus = "SUCCESS"
                         try {
                             bat "${MAVEN_HOME}/bin/mvn clean install"
-                        } catch (Exception e) {
-                            buildStatus = "FAILED"
                         } finally {
-                            metrics(name: 'build_status', help: 'Build Status', job: JOB_NAME, instance: INSTANCE_NAME, value: (buildStatus == "SUCCESS" ? 1 : 0))
+                            // No need to collect build metrics here; we'll do it after all stages complete
                         }
                     }
                 }
@@ -50,13 +48,13 @@ pipeline {
                         try {
                             bat "${MAVEN_HOME}/bin/mvn clean test"
                             // Assuming your test framework generates a coverage report, parse it here
-                            testCoverage = 85 // Example coverage percentage
+                            testCoverage = parseCoverageReport() // Function to parse coverage report, adjust as per your framework/tool
                             testStatus = "SUCCESS"
                         } catch (Exception e) {
                             testCoverage = 0
                         } finally {
-                            metrics(name: 'unit_test_coverage', help: 'Unit Test Coverage', job: JOB_NAME, instance: INSTANCE_NAME, value: testCoverage)
-                            metrics(name: 'unit_test_status', help: 'Unit Test Status', job: JOB_NAME, instance: INSTANCE_NAME, value: (testStatus == "SUCCESS" ? 1 : 0))
+                            collectMetrics().collectUnitTestCoverage(testCoverage)
+                            collectMetrics().collectUnitTestStatus(testStatus)
                         }
                     }
                 }
@@ -69,6 +67,14 @@ pipeline {
                     script {
                         withSonarQubeEnv('SonarQubeServer') {
                             bat "${MAVEN_HOME}/bin/mvn sonar:sonar -Dsonar.projectKey=springboot-app"
+                            // Collect SonarQube metrics
+                            def sonarMetrics = collectSonarMetrics()
+                            collectMetrics().collectSonarMetrics([
+                                lines_of_code: sonarMetrics.linesOfCode,
+                                bugs: sonarMetrics.bugs,
+                                vulnerabilities: sonarMetrics.vulnerabilities,
+                                code_smells: sonarMetrics.codeSmells
+                            ])
                         }
                     }
                 }
@@ -77,19 +83,18 @@ pipeline {
 
         stage('Artifactory Upload') {
             steps {
-                configFileProvider([configFile(fileId: 'settings.xml', targetLocation: "${env.HOME}/.m2/settings.xml")]) {
+                configFileProvider([configFile(fileId: 'settings.xml', targetLocation: "${WORKSPACE}/settings.xml")]) {
                     script {
                         def artifactoryStatus = "FAILED"
                         try {
                             withCredentials([usernamePassword(credentialsId: NEXUS_CREDENTIALS_ID, usernameVariable: 'NEXUS_USERNAME', passwordVariable: 'NEXUS_PASSWORD')]) {
-                                bat "${MAVEN_HOME}/bin/mvn clean install"
-								bat "${MAVEN_HOME}/bin/mvn deploy:deploy-file -Durl=${NEXUS_URL}/repository/${NEXUS_REPO} -DrepositoryId=nexus -Dfile=$WORKSPACE/target/springboot-app-1.0-SNAPSHOT.jar -DgroupId=com.example -DartifactId=springboot-app -Dversion=1.0 -Dpackaging=jar"
+                                bat "${MAVEN_HOME}/bin/mvn deploy -s ${WORKSPACE}/settings.xml"
                                 artifactoryStatus = "SUCCESS"
                             }
                         } catch (Exception e) {
                             artifactoryStatus = "FAILED"
                         } finally {
-                            metrics(name: 'artifactory_upload_status', help: 'Artifactory Upload Status', job: JOB_NAME, instance: INSTANCE_NAME, value: (artifactoryStatus == "SUCCESS" ? 1 : 0))
+                            collectMetrics().collectArtifactoryMetrics(artifactoryStatus)
                         }
                     }
                 }
@@ -99,9 +104,28 @@ pipeline {
 
     post {
         always {
+            script {
+                def endTime = new Date().getTime()
+                def buildDuration = (endTime - startTime) / 1000.0 // in seconds
+
+                // Calculate overall build status
+                def overallBuildStatus = currentBuild.currentResult == 'SUCCESS' ? 'SUCCESS' : 'FAILED'
+
+                // Collect overall build metrics
+                def buildMetrics = [
+                    build_duration: buildDuration,
+                    overall_build_status: overallBuildStatus
+                ]
+
+                // Push metrics to Prometheus Pushgateway
+                collectMetrics().pushToPushgateway("build_metrics", buildMetrics)
+            }
+
+            // Archive artifacts and run JUnit tests as before
             archiveArtifacts artifacts: 'target/*.jar', allowEmptyArchive: true
             junit 'target/surefire-reports/*.xml'
         }
+
         failure {
             mail to: 'your-email@example.com',
                  subject: "Failed Pipeline: ${currentBuild.fullDisplayName}",
@@ -109,3 +133,29 @@ pipeline {
         }
     }
 }
+
+def parseCoverageReport() {
+    def coverageFile = fileExists("${WORKSPACE}/target/site/jacoco/jacoco.xml")
+    
+    if (!coverageFile) {
+        return 0.0
+    }
+
+    def xml = new XmlParser().parse(coverageFile)
+
+    // Extract line coverage percentage
+    def lineCoverage = xml.'counter'.find { it.@type == 'LINE' }?.@covered
+    def totalLines = xml.'counter'.find { it.@type == 'LINE' }?.@missed.toInteger() + lineCoverage.toInteger()
+
+    return (lineCoverage.toInteger() * 100.0) / totalLines
+}
+
+boolean fileExists(String path) {
+    try {
+        def file = new File(path)
+        return file.exists()
+    } catch (Exception e) {
+        return false
+    }
+}
+
