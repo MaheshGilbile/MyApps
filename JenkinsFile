@@ -1,5 +1,5 @@
 // Jenkinsfile
-@Library('metrics@main') _
+@Library('metrics@appfit-postgres') _
 
 pipeline {
     agent any
@@ -56,38 +56,6 @@ pipeline {
                         bat "${MAVEN_HOME}/bin/mvn clean install"
                         bat "${MAVEN_HOME}/bin/mvn deploy -s ${WORKSPACE}/settings.xml"
                     }
-                }
-            }
-        }
-        stage('Metrics') {
-            steps {
-                script {
-                    def projectName = "${env.JOB_NAME}"
-                    if (projectName == null || projectName.isEmpty()) {
-                        echo "Project name is null or empty. Skipping metrics collection."
-                        return
-                    }
-
-                    def metricsCollector = new com.example.metrics.MetricsCollector()
-                    def metrics = metricsCollector.collectMetrics(projectName, "${env.APP_NAME}")
-
-                    if (metrics == null) {
-                        echo "Metrics are null. Skipping Prometheus push."
-                        return
-                    }
-
-                    prometheusPush(
-                        gateway: 'localhost:9091',
-                        job: projectName,
-                        metrics: [
-                            'total_builds': metrics['total_builds'],
-                            'total_success_builds': metrics['total_success_builds'],
-                            'total_failed_builds': metrics['total_failed_builds'],
-                            'average_build_time': metrics['average_build_time'],
-                            'success_rate': metrics['success_rate']
-                        ],
-                        app_name: "${env.APP_NAME}"
-                    )
                 }
             }
         }
