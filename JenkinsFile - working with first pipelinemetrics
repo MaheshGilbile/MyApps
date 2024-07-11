@@ -12,7 +12,6 @@ pipeline {
         INSTANCE_NAME = "${env.NODE_NAME}"
         BRANCH_NAME = 'main' // Example branch name
         APP_NAME = 'MyProjectName1' // Example application name
-        APP_ID = '123' // Example application ID
     }
 
     stages {
