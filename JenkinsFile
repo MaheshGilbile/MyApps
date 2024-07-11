@@ -34,7 +34,7 @@ pipeline {
             steps {
                 configFileProvider([configFile(fileId: 'settings.xml', targetLocation: "${env.HOME}/.m2/settings.xml")]) {
                     script {
-                        bat "${MAVEN_HOME}/bin/mvn"
+                        bat "${MAVEN_HOME}/bin/mvn clean test"
                     }
                 }
             }
